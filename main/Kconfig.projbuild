@@ -1,0 +1,25 @@
+menu "JoMo Hardware Configuration"
+
+    config JOMO_ADC1_CHANNEL_JOYSTICK_VRX
+        int "Joystick VRX LP ADC1 Channel"
+        default 0
+        range 0 7
+        help
+            Select the channel to be used for the joystick X axis
+
+    config JOMO_ADC1_CHANNEL_JOYSTICK_VRY
+        int "Joystick VRY LP ADC1 Channel"
+        default 1
+        range 0 7
+        help
+            Select the channel to be used for the joystick Y axis
+
+    config JOMO_JOYSTICK_SW_GPIO
+        int "Joystick SW GPIO"
+        default 2
+        range 0 21
+        help
+            Select the GPIO to be used for the joystick switch button
+
+endmenu
+
