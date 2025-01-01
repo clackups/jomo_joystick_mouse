@@ -28,7 +28,7 @@
 #include "hid_dev.h"
 
 #include "esp_adc/adc_oneshot.h"
-
+#include <math.h>
 
 
 #define JOMO_ADC_CHANNELS 2
@@ -36,11 +36,13 @@ static int jomo_adc_channels[JOMO_ADC_CHANNELS] = {
     CONFIG_JOMO_ADC1_CHANNEL_JOYSTICK_VRX,
     CONFIG_JOMO_ADC1_CHANNEL_JOYSTICK_VRY
 };
-static int jomo_adc_middle_min[JOMO_ADC_CHANNELS] = {4096,4096};
-static int jomo_adc_middle_max[JOMO_ADC_CHANNELS] = {0,0};
+static double jomo_adc_middle_min[JOMO_ADC_CHANNELS] = {4096,4096};
+static double jomo_adc_middle_max[JOMO_ADC_CHANNELS] = {0,0};
 
 static adc_oneshot_unit_handle_t adc1_handle;
 
+#define JOMO_EXP_DECAY_ALPHA 0.63
+static double jomo_adc_prev[JOMO_ADC_CHANNELS] = {0,0};
 
 
 /**
@@ -75,7 +77,7 @@ static void hidd_event_callback(esp_hidd_cb_event_t event, esp_hidd_cb_param_t *
 static uint8_t hidd_service_uuid128[] = {
     /* LSB <--------------------------------------------------------------------------------> MSB */
     //first uuid, 16bit, [12],[13] is the value
-    0xfb, 0x22, 0x9b, 0x5f, 0x80, 0x00, 0x00, 0x80, 0x00, 0x10, 0x00, 0x00, 0x12, 0x18, 0x00, 0x00,
+    0xfb, 0x34, 0x9b, 0x5f, 0x80, 0x00, 0x00, 0x80, 0x00, 0x10, 0x00, 0x00, 0x12, 0x18, 0x00, 0x00,
 };
 
 static esp_ble_adv_data_t hidd_adv_data = {
@@ -182,20 +184,42 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
 
 void jomo_hid_task(void *pvParameters)
 {
+    int measure_couter = 0;
     while(1) {
         if (sec_conn) {
-            int val[JOMO_ADC_CHANNELS] = {0,0};
+            int val[JOMO_ADC_CHANNELS];
             for(int i=0; i<JOMO_ADC_CHANNELS; i++) {
                 int raw;
                 ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, jomo_adc_channels[i], &raw));
-                if( raw < jomo_adc_middle_min[i] ) {
-                    val[i] = (raw - jomo_adc_middle_min[i])/50;
+                double rawval = raw;
+
+                double newval = JOMO_EXP_DECAY_ALPHA * rawval + (1-JOMO_EXP_DECAY_ALPHA) * jomo_adc_prev[i];
+                jomo_adc_prev[i] = newval;
+
+                if( newval < jomo_adc_middle_min[i] ) {
+                    newval -= jomo_adc_middle_min[i];
                 }
-                else if( raw > jomo_adc_middle_max[i] ) {
-                    val[i] = (raw - jomo_adc_middle_max[i])/50;
+                else if( newval > jomo_adc_middle_max[i] ) {
+                    newval -= jomo_adc_middle_max[i];
                 }
+                else {
+                    newval = 0;
+                }
+
+                newval /= 200;
+                newval *= fabs(newval);
+                if( fabs(newval) > 50 ) {
+                    newval = 50 * newval / fabs(newval);
+                }
+                val[i] = newval;
             }
-            esp_hidd_send_mouse_value(hid_conn_id, 0x00, val[0], val[1]);
+
+            measure_couter++;
+            if( measure_couter > 3 ) {
+                measure_couter = 0;
+                // ESP_LOGI(JOMO_TAG, "val0=%d val1=%d", val[0], val[1]);
+                esp_hidd_send_mouse_value(hid_conn_id, 0x00, val[0], val[1]);
+            }
         }
         vTaskDelay(10 / portTICK_PERIOD_MS);
     }
@@ -286,23 +310,25 @@ void app_main(void)
     for(int j=0; j<100; j++) {
         vTaskDelay(10 / portTICK_PERIOD_MS);
         for(int i=0; i<JOMO_ADC_CHANNELS; i++) {
-            int val;
-            ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, jomo_adc_channels[i], &val));
-            if( val < jomo_adc_middle_min[i] ) {
-                jomo_adc_middle_min[i] = val;
+            int raw;
+            ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, jomo_adc_channels[i], &raw));
+            double rawval = raw;
+            if( rawval < jomo_adc_middle_min[i] ) {
+                jomo_adc_middle_min[i] = rawval;
             }
-            if( val > jomo_adc_middle_max[i] ) {
-                jomo_adc_middle_max[i] = val;
+            if( rawval > jomo_adc_middle_max[i] ) {
+                jomo_adc_middle_max[i] = rawval;
             }
+
+            double newval = JOMO_EXP_DECAY_ALPHA * rawval + (1-JOMO_EXP_DECAY_ALPHA) * jomo_adc_prev[i];
+            jomo_adc_prev[i] = newval;
         }
     }
 
     for(int i=0; i<JOMO_ADC_CHANNELS; i++) {
-        int margin = (jomo_adc_middle_max[i] - jomo_adc_middle_min[i])/2;
+        int margin = (jomo_adc_middle_max[i] - jomo_adc_middle_min[i])/10;
         jomo_adc_middle_min[i] -= margin;
         jomo_adc_middle_max[i] += margin;
-        ESP_LOGI(JOMO_TAG, "ADC channel %d: min=%d, max=%d, margin=%d",
-                 i, jomo_adc_middle_min[i], jomo_adc_middle_max[i], margin);
     }
 
     xTaskCreate(&jomo_hid_task, "hid_task", 2048, NULL, tskIDLE_PRIORITY + 1, NULL);
