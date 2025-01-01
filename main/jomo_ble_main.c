@@ -44,6 +44,14 @@ static adc_oneshot_unit_handle_t adc1_handle;
 #define JOMO_EXP_DECAY_ALPHA 0.63
 static double jomo_adc_prev[JOMO_ADC_CHANNELS];
 
+#define JOMO_BUTTONS 3
+static int jomo_buttons_gpio[JOMO_BUTTONS] = {
+    CONFIG_JOMO_SCROLL_GPIO,
+    CONFIG_JOMO_BUTTON1_GPIO,
+    CONFIG_JOMO_BUTTON2_GPIO
+};
+
+
 
 /**
  * Brief:
@@ -86,7 +94,7 @@ static esp_ble_adv_data_t hidd_adv_data = {
     .include_txpower = true,
     .min_interval = 0x0006, //slave connection min interval, Time = min_interval * 1.25 msec
     .max_interval = 0x0010, //slave connection max interval, Time = max_interval * 1.25 msec
-    .appearance = 0x03c0,       //HID Generic,
+    .appearance = ESP_BLE_APPEARANCE_HID_JOYSTICK,
     .manufacturer_len = 0,
     .p_manufacturer_data =  NULL,
     .service_data_len = 0,
@@ -184,10 +192,9 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param
 
 void jomo_hid_task(void *pvParameters)
 {
-    int measure_couter = 0;
     while(1) {
         if (sec_conn) {
-            int val[JOMO_ADC_CHANNELS];
+            int8_t val[JOMO_ADC_CHANNELS];
             for(int i=0; i<JOMO_ADC_CHANNELS; i++) {
                 int raw;
                 ESP_ERROR_CHECK(adc_oneshot_read(adc1_handle, jomo_adc_channels[i], &raw));
@@ -206,22 +213,51 @@ void jomo_hid_task(void *pvParameters)
                     newval = 0;
                 }
 
-                newval /= 200;
-                newval *= fabs(newval);
-                if( fabs(newval) > 50 ) {
-                    newval = 50 * newval / fabs(newval);
+                newval /= 1000.0;
+                double abs_newval = fabs(newval);
+                newval *= abs_newval * abs_newval * abs_newval * abs_newval;
+                abs_newval = fabs(newval);
+                if( abs_newval > 0 && abs_newval < 1.0 ) {
+                    newval = 1.0 * newval / abs_newval;
+                }
+                if( abs_newval > 32.0 ) {
+                    newval = 32.0 * newval / abs_newval;
                 }
                 val[i] = newval;
             }
 
-            measure_couter++;
-            if( measure_couter > 3 ) {
-                measure_couter = 0;
-                // ESP_LOGI(JOMO_TAG, "val0=%d val1=%d", val[0], val[1]);
-                esp_hidd_send_mouse_value(hid_conn_id, 0x00, val[0], val[1]);
+            // ESP_LOGI(JOMO_TAG, "val0=%d val1=%d", val[0], val[1]);
+
+            int button_pressed[JOMO_BUTTONS];
+            for(int i=0; i<JOMO_BUTTONS; i++) {
+                button_pressed[i] = (gpio_get_level(jomo_buttons_gpio[i]) == 0)? 1:0;
+            }
+
+            uint8_t buttons = 0;
+            int8_t mouse_x = 0;
+            int8_t mouse_y = 0;
+            int8_t wheel = 0;
+
+            if( button_pressed[0] ) { // scroll button pressed
+                wheel = val[1];
+            }
+            else {
+                mouse_x = val[0];
+                mouse_y = val[1];
+            }
+
+            if( button_pressed[1] ) {
+                buttons |= 0x01 << 0;
+            }
+            if( button_pressed[2] ) {
+                buttons |= 0x01 << 1;
+            }
+
+            if( buttons != 0 || mouse_x != 0 || mouse_y != 0 || wheel != 0 ) {
+                esp_hidd_send_mouse_value(hid_conn_id, buttons, mouse_x, mouse_y, wheel);
             }
         }
-        vTaskDelay(10 / portTICK_PERIOD_MS);
+        vTaskDelay(20 / portTICK_PERIOD_MS);
     }
 }
 
@@ -327,6 +363,11 @@ void app_main(void)
         jomo_adc_middle_min[i] -= margin;
         jomo_adc_middle_max[i] += margin;
         jomo_adc_prev[i] = (jomo_adc_middle_min[i] + jomo_adc_middle_max[i])/2;
+    }
+
+    for(int i=0; i<JOMO_BUTTONS; i++) {
+        gpio_set_direction(jomo_buttons_gpio[i], GPIO_MODE_INPUT);
+        gpio_set_pull_mode(jomo_buttons_gpio[i], GPIO_PULLUP_ONLY);
     }
 
     xTaskCreate(&jomo_hid_task, "hid_task", 2048, NULL, tskIDLE_PRIORITY + 1, NULL);

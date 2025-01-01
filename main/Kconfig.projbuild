@@ -14,12 +14,26 @@ menu "JoMo Hardware Configuration"
         help
             Select the channel to be used for the joystick Y axis
 
-    config JOMO_JOYSTICK_SW_GPIO
-        int "Joystick SW GPIO"
+    config JOMO_SCROLL_GPIO
+        int "Scroll button GPIO"
         default 2
         range 0 21
         help
-            Select the GPIO to be used for the joystick switch button
+            Select the GPIO to be used for the scroll button
+
+    config JOMO_BUTTON1_GPIO
+        int "Mouse Button 1 GPIO"
+        default 3
+        range 0 21
+        help
+            Select the GPIO to be used as Mouse button 1
+
+    config JOMO_BUTTON2_GPIO
+        int "Mouse Button 2 GPIO"
+        default 4
+        range 0 21
+        help
+            Select the GPIO to be used as Mouse button 2
 
 endmenu
 
