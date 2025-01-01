@@ -42,7 +42,7 @@ static double jomo_adc_middle_max[JOMO_ADC_CHANNELS] = {0,0};
 static adc_oneshot_unit_handle_t adc1_handle;
 
 #define JOMO_EXP_DECAY_ALPHA 0.63
-static double jomo_adc_prev[JOMO_ADC_CHANNELS] = {0,0};
+static double jomo_adc_prev[JOMO_ADC_CHANNELS];
 
 
 /**
@@ -319,9 +319,6 @@ void app_main(void)
             if( rawval > jomo_adc_middle_max[i] ) {
                 jomo_adc_middle_max[i] = rawval;
             }
-
-            double newval = JOMO_EXP_DECAY_ALPHA * rawval + (1-JOMO_EXP_DECAY_ALPHA) * jomo_adc_prev[i];
-            jomo_adc_prev[i] = newval;
         }
     }
 
@@ -329,6 +326,7 @@ void app_main(void)
         int margin = (jomo_adc_middle_max[i] - jomo_adc_middle_min[i])/10;
         jomo_adc_middle_min[i] -= margin;
         jomo_adc_middle_max[i] += margin;
+        jomo_adc_prev[i] = (jomo_adc_middle_min[i] + jomo_adc_middle_max[i])/2;
     }
 
     xTaskCreate(&jomo_hid_task, "hid_task", 2048, NULL, tskIDLE_PRIORITY + 1, NULL);
